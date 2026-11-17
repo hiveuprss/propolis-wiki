@@ -1,5 +1,9 @@
 {% extends 'base.html' %}
 
+{% block head_scripts %}
+<script src="{{ url_for('static', filename='js/vendor/dhive.js') }}"></script>
+{% endblock %}
+
 {% block content %}
 <h1>Edit history of {{ post.title }}</h1>
 This is a full list of edits on the article

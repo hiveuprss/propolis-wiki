@@ -1,5 +1,11 @@
 {% extends 'base.html' %}
 
+{% block head_scripts %}
+<script src="{{ url_for('static', filename='js/tui-editor-latex.js') }}"></script>
+<script src="{{ url_for('static', filename='js/vendor/keychain.js') }}"></script>
+<script src="{{ url_for('static', filename='js/vendor/dhive.js') }}"></script>
+{% endblock %}
+
 {% block content %}
 <div class="editorview">
 

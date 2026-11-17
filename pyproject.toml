@@ -9,7 +9,8 @@ dependencies = [
     "redis",
     "bleach",
     "psycopg2-binary",
-    "diff-match-patch"
+    "diff-match-patch",
+    "markdown",
 ]
 
 [build-system]

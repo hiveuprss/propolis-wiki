@@ -23,16 +23,11 @@
         <link rel="apple-touch-icon" href="apple-touch-icon.png">
         <!-- Place favicon.ico in the root directory -->
         <link rel="stylesheet" href="{{ url_for('static', filename='css/wiki.css') }}">
-        <script src="{{ url_for('static', filename='js/vendor/modernizr-2.8.3.min.js') }}"></script>
 		<script>
 			var username = "{{ session['username'] }}";
 			var wiki_user = "{{ config['WIKI_USER'] }}";
 		</script>
-		<script src="{{ url_for('static', filename='js/tui-editor-latex.js') }}"></script>
-        <script src="{{ url_for('static', filename='js/vendor/keychain.js') }}"></script>
-		<script src="{{ url_for('static', filename='js/vendor/dhive.js') }}"></script>
-
-		<link rel="stylesheet" href="{{ url_for('static', filename='css/fonts/font-awesome.css') }}" />
+		{% block head_scripts %}{% endblock %}
     </head>
     <body>
         <div class="wrapAll clearfix">
@@ -127,10 +122,10 @@
 				</div>
 				<div class="pagefooter">
 					{% block last_update %}
-					{% if last_update is defined %}
+					{% if last_update %}
 					<span id="last_update">
 						This page was last edited on <span id="last_updated">{{ last_update[0] }}</span>
-						{% if last_update[1] %}
+						{% if last_update|length > 1 and last_update[1] %}
 						<span id="last_updater"> by <a href="#" id="last_updater_link">@<span id="last_updater_user">{{ last_update[1] }}</span></a></span>
 						{% endif %}
 					</span>

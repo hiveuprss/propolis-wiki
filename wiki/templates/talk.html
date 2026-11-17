@@ -1,5 +1,9 @@
 {% extends 'base.html' %}
 
+{% block head_scripts %}
+<script src="{{ url_for('static', filename='js/tui-editor-latex.js') }}"></script>
+{% endblock %}
+
 {% block content %}
 <script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
 <script src="https://uicdn.toast.com/editor-plugin-table-merged-cell/latest/toastui-editor-plugin-table-merged-cell.min.js"></script>
