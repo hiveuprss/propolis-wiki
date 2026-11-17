@@ -1,5 +1,9 @@
 {% extends "login_base.html" %}
 
+{% block head_scripts %}
+<script src="{{ url_for('static', filename='js/vendor/keychain.js') }}"></script>
+{% endblock %}
+
 {% block login_form %}
 <div style="display: none;" id="keychainError">Please install the <a href="https://hive-keychain.com/">Hive Keychain browser extension</a></div>
 

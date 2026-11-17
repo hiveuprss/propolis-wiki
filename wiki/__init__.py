@@ -26,6 +26,19 @@ def create_app():
     )
 
     app.config.from_pyfile('config.py')
+
+    # Docker / env overrides (compose sets DB_* and SESSION_REDIS)
+    for key in (
+        'SECRET_KEY', 'WIKI_USER', 'POSTING_KEY', 'ACTIVE_KEY',
+        'DB_HOSTNAME', 'DATABASE', 'DB_USERNAME', 'DB_PASSWORD',
+        'SESSION_REDIS', 'HIVE_INTERFACE', 'START_PAGE', 'EDIT_GUIDELINES',
+    ):
+        if key in os.environ:
+            app.config[key] = os.environ[key]
+
+    # Browser-cache static assets (HTML stays no-store via blueprint after_request)
+    app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 86400
+
     app.config['SESSION_REDIS'] = redis.from_url(app.config['SESSION_REDIS'])
     app.secret_key = app.config['SECRET_KEY']
 

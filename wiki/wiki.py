@@ -17,6 +17,7 @@ from beem.blockchain import Blockchain
 
 from markupsafe import Markup
 import bleach
+import markdown as md_lib
 
 bp = Blueprint('wiki', __name__)
 
@@ -278,6 +279,32 @@ def wikifyHeaders(body):
 def wikifyHiveLinks(body):
     return body.replace('](/@', ']('+current_app.config['HIVE_INTERFACE']+'/@')
 
+def markdown_to_html(body):
+    return md_lib.markdown(
+        body,
+        extensions=['extra', 'sane_lists', 'fenced_code', 'tables', 'nl2br'],
+        output_format='html5',
+    )
+
+def render_article_html(body):
+    """Wikify markdown, convert to HTML, then sanitize for article pages."""
+    return Markup(xssEscape(markdown_to_html(wikifyBody(body))))
+
+def wiki_link_anchor(link, exists):
+    """Build an <a> for a [[wiki link]] / [[target|label]] token."""
+    has_fragment = '|' in link
+    target = link.split('|')[0].strip()
+    label = link.split('|')[1].strip() if has_fragment else target
+    link_text = target.replace('-', ' ').strip()
+    fragment = ''
+    if has_fragment:
+        link_text = '%s (%s)' % (link_text, label)
+        fragment = '#' + label.replace(' ', '')
+    href = '/wiki/' + formatWikiLink(target) + fragment
+    cls = ' class="article404"' if exists < 1 else ''
+    title = target.lower()
+    return '<a href="%s" title="%s"%s>%s</a>' % (href, title, cls, link_text)
+
 def wikifyBody(body):
     new_body, codeblocks = extractCodeBlocks(restoreSource(body))
 
@@ -286,11 +313,8 @@ def wikifyBody(body):
     related, new_body = getRelated(new_body)
     if len(related) > 0:
         new_body += "\n## Related Articles\n"
-        for (rel,exists,title) in related:
-            new_body += '<span title="%s"' % title
-            if(exists < 1):
-                new_body += ' class="article404"'
-            new_body += '>%s</span>\n' % rel
+        for (anchor, _exists, _title) in related:
+            new_body += anchor + "\n"
     
     new_body = wikifyHeaders(new_body)
 
@@ -302,30 +326,36 @@ def getRelated(new_body):
     related = []
     existsDict = {}
 
-    # create list of related links
-    links = re.findall("\[\[([^\]]+)\]\]", new_body)
-    for link in links:
-        linkNoFragment = link.split('|')[0]
-        rel = '[[%s]]' % formatWikiLink(linkNoFragment)
-        exists = db_count('SELECT count(permlink) FROM posts WHERE permlink=%s',(unformatWikiLink(linkNoFragment),))
-        existsDict[link] = exists
-
-        title = linkNoFragment.lower()
-        tuple = (rel,exists,title)
-        if ':' not in link and tuple not in related:
-            related.append(tuple)
-
+    links = re.findall(r"\[\[([^\]]+)\]\]", new_body)
     if not links:
         return related, new_body
 
-    # replace links in body
+    # Batch existence checks (one query, one connection)
+    permlinks = list({unformatWikiLink(link.split('|')[0]) for link in links})
+    existing = set()
+    if permlinks:
+        placeholders = ','.join(['%s'] * len(permlinks))
+        rows = db_get_all(
+            'SELECT permlink FROM posts WHERE permlink IN (%s)' % placeholders,
+            tuple(permlinks),
+        )
+        existing = {row[0] for row in rows}
+
+    for link in links:
+        linkNoFragment = link.split('|')[0]
+        exists = 1 if unformatWikiLink(linkNoFragment) in existing else 0
+        existsDict[link] = exists
+        anchor = wiki_link_anchor(link, exists)
+        title = linkNoFragment.lower()
+        item = (anchor, exists, title)
+        if ':' not in link and item not in related:
+            related.append(item)
+
     tokenized = new_body.split('[[')
     new_body = tokenized[0]
-
     for token in tokenized[1:]:
-        link, rest = token.split(']]')
-        new_body += '<span title="%s" %s>[[%s]]</span>' % (link, ' class="article404"' if existsDict[link] < 1 else '', link)
-
+        link, rest = token.split(']]', 1)
+        new_body += wiki_link_anchor(link, existsDict.get(link, 0))
         new_body += rest
 
     return related, new_body
@@ -364,19 +394,30 @@ def inject_session_data():
 @bp.before_request
 def before_request():
     if 'username' not in session.keys():
-        session.pop('userlevel',None)
-    if 'username' in session.keys():
-        userlevel = 0
-        account = Account(current_app.config['WIKI_USER'])
-        for key in account["posting"]["account_auths"]:
-            if key[0] == session['username']:
-                userlevel = key[1]
-        session['userlevel'] = userlevel
+        session.pop('userlevel', None)
+        session.pop('userlevel_checked_at', None)
+        return
+    # Cache Hive account_auths lookup — avoid RPC on every request
+    now = time.time()
+    checked_at = session.get('userlevel_checked_at') or 0
+    if 'userlevel' in session and (now - checked_at) < 300:
+        return
+    userlevel = 0
+    account = Account(current_app.config['WIKI_USER'])
+    for key in account["posting"]["account_auths"]:
+        if key[0] == session['username']:
+            userlevel = key[1]
+    session['userlevel'] = userlevel
+    session['userlevel_checked_at'] = now
 
 @bp.after_request
 def add_header(response):
-    # response.cache_control.no_store = True
-    if 'Cache-Control' not in response.headers:
+    if 'Cache-Control' in response.headers:
+        return response
+    # Allow browsers to cache static assets; keep HTML private/dynamic
+    if request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'public, max-age=86400'
+    else:
         response.headers['Cache-Control'] = 'no-store'
     return response
 
@@ -437,17 +478,38 @@ def wiki(article):
 
     try:
         post = Comment(current_app.config['WIKI_USER']+"/"+permlink)
-        last_update = [db_get_all('SELECT timestamp FROM comments WHERE permlink=%s ORDER BY timestamp DESC LIMIT 1',(permlink,))[0][0]]
-        if post.json_metadata['appdata']['user']:
-            last_update.append(post.json_metadata['appdata']['user'])   
-        body = Markup(xssEscape(wikifyBody(post.body)))
-        return render_template('wiki.html',post=post,body=body,last_update=last_update,pagetitle=xssEscape(post.title))
-    except:
-        post = {
-            'title': article_f,
-            'body': "The community has yet to [write this article](/create/"+article_f+").\n\nThis is where you step in. Care to write what you know from a simple description or even a full, referenced wiki? Content will be community-fed and edited, you will be helping the cause and qualify for a weekly content reward.\n\n[Give it a try!](/create/"+article_f+")"
-        }
-        return render_template('wiki.html',post=post,body=post['body'],pagetitle='Create article')
+        rows = db_get_all(
+            'SELECT timestamp FROM comments WHERE permlink=%s ORDER BY timestamp DESC LIMIT 1',
+            (permlink,),
+        )
+        last_update = [rows[0][0]] if rows else None
+        if last_update is not None:
+            user = (post.json_metadata or {}).get('appdata', {}).get('user')
+            if user:
+                last_update.append(user)
+        body = render_article_html(post.body)
+        return render_template(
+            'wiki.html',
+            post=post,
+            body=body,
+            last_update=last_update,
+            pagetitle=xssEscape(post.title),
+        )
+    except Exception:
+        stub = (
+            "The community has yet to [write this article](/create/" + article_f + ").\n\n"
+            "This is where you step in. Care to write what you know from a simple description "
+            "or even a full, referenced wiki? Content will be community-fed and edited, you will "
+            "be helping the cause and qualify for a weekly content reward.\n\n"
+            "[Give it a try!](/create/" + article_f + ")"
+        )
+        post = {'title': article_f, 'body': stub}
+        return render_template(
+            'wiki.html',
+            post=post,
+            body=render_article_html(stub),
+            pagetitle='Create article',
+        )
     
 @bp.route('/@<username>/<permlink>')
 def reroute(username, permlink):
@@ -515,7 +577,7 @@ def revision(article, trx_id):
     post = post['operations'][0]['value']
     post['json_metadata'] = json.loads(post['json_metadata'])
 
-    body = Markup(xssEscape(wikifyBody(getRevisionBody(permlink,trx_id))))
+    body = render_article_html(getRevisionBody(permlink,trx_id))
     last_update = [db_get_all('SELECT timestamp FROM comments WHERE trx_id=%s LIMIT 1;',(trx_id,))[0][0],post['json_metadata']['appdata']['user']]
     latest = db_get_all('SELECT trx_id, timestamp, author FROM comments WHERE permlink=%s ORDER BY timestamp DESC LIMIT 1',(permlink,))[0]
     latest_update = [latest[1],latest[2]]
